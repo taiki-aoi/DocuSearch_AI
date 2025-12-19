@@ -1,0 +1,14 @@
+# Environment files (contain secrets)
+.env
+
+# Data volumes
+volumes/*
+
+# Watch folders
+watch/documents/*
+watch/images/*
+
+# Keep folder structure
+!volumes/.gitkeep
+!watch/documents/.gitkeep
+!watch/images/.gitkeep

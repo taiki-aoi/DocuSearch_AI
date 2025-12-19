@@ -1,0 +1,255 @@
+{
+  "name": "Image Processing - DocuSearch",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "ワークフロー開始",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// EXIF情報を抽出するコード\nconst item = $input.first();\nconst binaryData = item.binary?.data;\n\nif (!binaryData) {\n  return [{\n    json: {\n      ...item.json,\n      exif: { error: 'No binary data found', has_gps: false }\n    }\n  }];\n}\n\n// Base64データを取得\nconst base64Data = binaryData.data;\nconst fileName = binaryData.fileName || item.json.name || 'unknown.jpg';\n\n// EXIFデータの簡易解析（実際の運用ではPythonスクリプトを呼び出し推奨）\n// ここでは基本情報を返す\nconst result = {\n  json: {\n    originalPath: item.json.path,\n    fileName: fileName,\n    base64Data: base64Data,\n    mimeType: binaryData.mimeType || 'image/jpeg',\n    fileSize: binaryData.fileSize,\n    exif: {\n      datetime: null,\n      latitude: null,\n      longitude: null,\n      has_gps: false,\n      camera_make: null,\n      camera_model: null\n    }\n  }\n};\n\nreturn [result];"
+      },
+      "id": "extract-exif",
+      "name": "EXIF抽出",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-gps",
+              "leftValue": "={{ $json.exif.has_gps }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-gps",
+      "name": "GPS有無チェック",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://nominatim.openstreetmap.org/reverse",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "lat", "value": "={{ $json.exif.latitude }}" },
+            { "name": "lon", "value": "={{ $json.exif.longitude }}" },
+            { "name": "format", "value": "json" },
+            { "name": "accept-language", "value": "ja" },
+            { "name": "addressdetails", "value": "1" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "User-Agent", "value": "DocuSearch_AI/1.0" }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "geocoding",
+      "name": "ジオコーディング",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [660, -100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst geoData = item.json;\nconst prevData = $('EXIF抽出').first().json;\n\n// 住所をフォーマット\nconst address = geoData.address || {};\nconst parts = [];\n\nif (address.country) parts.push(address.country);\nif (address.state || address.province) parts.push(address.state || address.province);\nif (address.city || address.town || address.village) {\n  parts.push(address.city || address.town || address.village);\n}\nif (address.suburb || address.neighbourhood) {\n  parts.push(address.suburb || address.neighbourhood);\n}\n\nconst formattedAddress = parts.join(', ') || geoData.display_name || '住所不明';\n\nreturn [{\n  json: {\n    ...prevData,\n    location: {\n      formatted: formattedAddress,\n      full: geoData.display_name,\n      raw: address\n    }\n  }\n}];"
+      },
+      "id": "format-address",
+      "name": "住所フォーマット",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\n\nreturn [{\n  json: {\n    ...item.json,\n    location: {\n      formatted: '位置情報なし',\n      full: null,\n      raw: null\n    }\n  }\n}];"
+      },
+      "id": "no-gps",
+      "name": "位置情報なし",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 100]
+    },
+    {
+      "parameters": {},
+      "id": "merge-location",
+      "name": "位置情報マージ",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "key", "value": "YOUR_GEMINI_API_KEY" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [\n      {\n        \"text\": \"この画像を詳細に分析し、検索用のメタデータを作成してください。以下の点を含めて記述してください：\\n\\n1. 写っている物体（具体的に）\\n   - 建物がある場合、その種類（マンション、ビル、戸建て、オフィス、商業施設など）\\n   - 車両がある場合、種類（乗用車、トラック、バイクなど）\\n   - 人物がいる場合、人数と状況（ビジネス、カジュアル、イベントなど）\\n\\n2. シチュエーション・場面\\n   - 食事、会議、工事現場、旅行、イベント、日常など\\n   - 料理がある場合、ジャンル（イタリアン、和食、中華、カフェなど）\\n\\n3. 雰囲気や色味\\n   - 明るい、暗い、モダン、レトロ、ポップ、落ち着いた雰囲気など\\n\\n4. 読み取れる文字情報\\n   - 看板、書籍、掲示板など読める文字があれば記述\\n\\n5. 場所の推測\\n   - 屋内/屋外、都市/郊外/自然など\\n\\n出力は日本語の自然な文章で、検索キーワード化しやすい形式でお願いします。\"\n      },\n      {\n        \"inline_data\": {\n          \"mime_type\": \"{{ $json.mimeType }}\",\n          \"data\": \"{{ $json.base64Data }}\"\n        }\n      }\n    ]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.7,\n    \"maxOutputTokens\": 1024\n  }\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "gemini-vision",
+      "name": "Gemini Vision API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1320, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst prevData = $('位置情報マージ').first().json;\nconst geminiResponse = item.json;\n\n// Geminiレスポンスからキャプションを抽出\nlet caption = '';\ntry {\n  caption = geminiResponse.candidates[0].content.parts[0].text || '';\n} catch (e) {\n  caption = 'キャプション生成エラー';\n}\n\n// Dify用ドキュメントテキストを構築\nconst parts = [];\nparts.push(`■ファイル名: ${prevData.fileName}`);\n\nif (prevData.exif && prevData.exif.datetime) {\n  parts.push(`■撮影日時: ${prevData.exif.datetime}`);\n}\n\nif (prevData.location && prevData.location.formatted) {\n  parts.push(`■撮影場所: ${prevData.location.formatted}`);\n}\n\nif (prevData.exif && prevData.exif.latitude && prevData.exif.longitude) {\n  parts.push(`■座標: 緯度${prevData.exif.latitude}, 経度${prevData.exif.longitude}`);\n}\n\nif (prevData.exif && prevData.exif.camera_model) {\n  const camera = prevData.exif.camera_make \n    ? `${prevData.exif.camera_make} ${prevData.exif.camera_model}`\n    : prevData.exif.camera_model;\n  parts.push(`■カメラ: ${camera}`);\n}\n\nparts.push('■画像内容の説明:');\nparts.push(caption);\n\nconst documentText = parts.join('\\n');\n\nreturn [{\n  json: {\n    ...prevData,\n    visionCaption: caption,\n    documentText: documentText\n  }\n}];"
+      },
+      "id": "build-document",
+      "name": "ドキュメント構築",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dify-api:5001/v1/datasets/YOUR_DATASET_ID/document/create-by-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"name\": \"{{ $json.fileName }}\",\n  \"text\": {{ JSON.stringify($json.documentText) }},\n  \"indexing_technique\": \"high_quality\",\n  \"process_rule\": {\n    \"mode\": \"automatic\"\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "dify-index",
+      "name": "Dify登録",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1760, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dify-api-key",
+          "name": "Dify API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント構築').first().json;\nconst difyResponse = item.json;\n\nreturn [{\n  json: {\n    success: true,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    documentId: difyResponse.document?.id || null,\n    processedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "result",
+      "name": "結果出力",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 0]
+    }
+  ],
+  "connections": {
+    "ワークフロー開始": {
+      "main": [
+        [{ "node": "EXIF抽出", "type": "main", "index": 0 }]
+      ]
+    },
+    "EXIF抽出": {
+      "main": [
+        [{ "node": "GPS有無チェック", "type": "main", "index": 0 }]
+      ]
+    },
+    "GPS有無チェック": {
+      "main": [
+        [{ "node": "ジオコーディング", "type": "main", "index": 0 }],
+        [{ "node": "位置情報なし", "type": "main", "index": 0 }]
+      ]
+    },
+    "ジオコーディング": {
+      "main": [
+        [{ "node": "住所フォーマット", "type": "main", "index": 0 }]
+      ]
+    },
+    "住所フォーマット": {
+      "main": [
+        [{ "node": "位置情報マージ", "type": "main", "index": 0 }]
+      ]
+    },
+    "位置情報なし": {
+      "main": [
+        [{ "node": "位置情報マージ", "type": "main", "index": 1 }]
+      ]
+    },
+    "位置情報マージ": {
+      "main": [
+        [{ "node": "Gemini Vision API", "type": "main", "index": 0 }]
+      ]
+    },
+    "Gemini Vision API": {
+      "main": [
+        [{ "node": "ドキュメント構築", "type": "main", "index": 0 }]
+      ]
+    },
+    "ドキュメント構築": {
+      "main": [
+        [{ "node": "Dify登録", "type": "main", "index": 0 }]
+      ]
+    },
+    "Dify登録": {
+      "main": [
+        [{ "node": "結果出力", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["docusearch", "image-processing"]
+}

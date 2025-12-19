@@ -1,0 +1,219 @@
+{
+  "name": "Document Processing - DocuSearch",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "workflow-trigger",
+      "name": "ワークフロー開始",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ドキュメント情報を準備\nconst item = $input.first();\nconst binaryData = item.binary?.data;\n\nif (!binaryData) {\n  return [{\n    json: {\n      error: 'No binary data found',\n      success: false\n    }\n  }];\n}\n\nconst fileName = binaryData.fileName || item.json.name || 'unknown';\nconst mimeType = binaryData.mimeType || 'application/octet-stream';\nconst fileSize = binaryData.fileSize || 0;\n\n// ファイル拡張子を取得\nconst ext = fileName.split('.').pop()?.toLowerCase() || '';\n\n// MIMEタイプのマッピング\nconst mimeMap = {\n  'pdf': 'application/pdf',\n  'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',\n  'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n  'txt': 'text/plain',\n  'md': 'text/markdown'\n};\n\nreturn [{\n  json: {\n    originalPath: item.json.path,\n    fileName: fileName,\n    extension: ext,\n    mimeType: mimeMap[ext] || mimeType,\n    fileSize: fileSize,\n    base64Data: binaryData.data\n  },\n  binary: item.binary\n}];"
+      },
+      "id": "prepare-document",
+      "name": "ドキュメント準備",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dify-api:5001/v1/datasets/YOUR_DATASET_ID/document/create-by-file",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "file",
+              "parameterType": "formBinaryData",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "data",
+              "parameterType": "formData",
+              "value": "={\"indexing_technique\":\"high_quality\",\"process_rule\":{\"mode\":\"automatic\",\"rules\":{\"pre_processing_rules\":[{\"id\":\"remove_extra_spaces\",\"enabled\":true},{\"id\":\"remove_urls_emails\",\"enabled\":false}],\"segmentation\":{\"separator\":\"###\",\"max_tokens\":800}}}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "dify-upload",
+      "name": "Difyファイルアップロード",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [440, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dify-api-key",
+          "name": "Dify API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント準備').first().json;\nconst difyResponse = item.json;\n\n// ドキュメントIDを取得\nconst documentId = difyResponse.document?.id || null;\nconst batch = difyResponse.batch || null;\n\nreturn [{\n  json: {\n    documentId: documentId,\n    batch: batch,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    status: 'indexing'\n  }\n}];"
+      },
+      "id": "get-document-id",
+      "name": "ドキュメントID取得",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds"
+      },
+      "id": "wait-indexing",
+      "name": "インデックス待機",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://dify-api:5001/v1/datasets/YOUR_DATASET_ID/documents/{{ $json.batch }}/indexing-status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "check-status",
+      "name": "ステータス確認",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1100, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dify-api-key",
+          "name": "Dify API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "check-completed",
+              "leftValue": "={{ $json.data[0]?.indexing_status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "id": "is-completed",
+      "name": "完了チェック",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメントID取得').first().json;\n\nreturn [{\n  json: {\n    success: true,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    documentId: prevData.documentId,\n    status: 'completed',\n    processedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "result-success",
+      "name": "成功結果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, -100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメントID取得').first().json;\nconst statusData = item.json;\n\n// まだ処理中の場合\nconst status = statusData.data?.[0]?.indexing_status || 'unknown';\n\nif (status === 'indexing' || status === 'parsing') {\n  // 処理中 - 待機して再チェック（ループの代わりに警告を出力）\n  return [{\n    json: {\n      success: true,\n      fileName: prevData.fileName,\n      originalPath: prevData.originalPath,\n      documentId: prevData.documentId,\n      status: 'processing',\n      message: 'Document is still being processed. Check Dify console for status.',\n      processedAt: new Date().toISOString()\n    }\n  }];\n}\n\n// エラーの場合\nreturn [{\n  json: {\n    success: false,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    documentId: prevData.documentId,\n    status: status,\n    error: statusData.data?.[0]?.error || 'Unknown error',\n    processedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "result-pending",
+      "name": "処理中/エラー結果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 100]
+    },
+    {
+      "parameters": {},
+      "id": "merge-results",
+      "name": "結果マージ",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [1760, 0]
+    }
+  ],
+  "connections": {
+    "ワークフロー開始": {
+      "main": [
+        [{ "node": "ドキュメント準備", "type": "main", "index": 0 }]
+      ]
+    },
+    "ドキュメント準備": {
+      "main": [
+        [{ "node": "Difyファイルアップロード", "type": "main", "index": 0 }]
+      ]
+    },
+    "Difyファイルアップロード": {
+      "main": [
+        [{ "node": "ドキュメントID取得", "type": "main", "index": 0 }]
+      ]
+    },
+    "ドキュメントID取得": {
+      "main": [
+        [{ "node": "インデックス待機", "type": "main", "index": 0 }]
+      ]
+    },
+    "インデックス待機": {
+      "main": [
+        [{ "node": "ステータス確認", "type": "main", "index": 0 }]
+      ]
+    },
+    "ステータス確認": {
+      "main": [
+        [{ "node": "完了チェック", "type": "main", "index": 0 }]
+      ]
+    },
+    "完了チェック": {
+      "main": [
+        [{ "node": "成功結果", "type": "main", "index": 0 }],
+        [{ "node": "処理中/エラー結果", "type": "main", "index": 0 }]
+      ]
+    },
+    "成功結果": {
+      "main": [
+        [{ "node": "結果マージ", "type": "main", "index": 0 }]
+      ]
+    },
+    "処理中/エラー結果": {
+      "main": [
+        [{ "node": "結果マージ", "type": "main", "index": 1 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["docusearch", "document-processing"]
+}
