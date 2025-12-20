@@ -11,7 +11,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ドキュメント情報を準備\nconst item = $input.first();\nconst binaryData = item.binary?.data;\n\nif (!binaryData) {\n  return [{\n    json: {\n      error: 'No binary data found',\n      success: false\n    }\n  }];\n}\n\nconst fileName = binaryData.fileName || item.json.name || 'unknown';\nconst mimeType = binaryData.mimeType || 'application/octet-stream';\nconst fileSize = binaryData.fileSize || 0;\n\n// ファイル拡張子を取得\nconst ext = fileName.split('.').pop()?.toLowerCase() || '';\n\n// MIMEタイプのマッピング\nconst mimeMap = {\n  'pdf': 'application/pdf',\n  'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',\n  'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n  'txt': 'text/plain',\n  'md': 'text/markdown'\n};\n\nreturn [{\n  json: {\n    originalPath: item.json.path,\n    fileName: fileName,\n    extension: ext,\n    mimeType: mimeMap[ext] || mimeType,\n    fileSize: fileSize,\n    base64Data: binaryData.data\n  },\n  binary: item.binary\n}];"
+        "jsCode": "// ドキュメント情報を準備\nconst item = $input.first();\nconst binaryData = item.binary?.data;\n\nif (!binaryData) {\n  return [{\n    json: {\n      error: 'No binary data found',\n      success: false\n    }\n  }];\n}\n\nconst fileName = binaryData.fileName || item.json.name || 'unknown';\nconst mimeType = binaryData.mimeType || 'application/octet-stream';\nconst fileSize = binaryData.fileSize || 0;\n\n// ファイル拡張子を取得\nconst ext = fileName.split('.').pop()?.toLowerCase() || '';\n\n// MIMEタイプ�Eマッピング\nconst mimeMap = {\n  'pdf': 'application/pdf',\n  'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',\n  'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n  'txt': 'text/plain',\n  'md': 'text/markdown'\n};\n\nreturn [{\n  json: {\n    originalPath: item.json.path,\n    fileName: fileName,\n    extension: ext,\n    mimeType: mimeMap[ext] || mimeType,\n    fileSize: fileSize,\n    base64Data: binaryData.data\n  },\n  binary: item.binary\n}];"
       },
       "id": "prepare-document",
       "name": "ドキュメント準備",
@@ -22,7 +22,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://dify-api:5001/v1/datasets/YOUR_DATASET_ID/document/create-by-file",
+        "url": "http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/document/create_by_file",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
@@ -57,16 +57,11 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000,
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "dify-api-key",
-          "name": "Dify API Key"
-        }
-      }
+      "credentials": {}
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント準備').first().json;\nconst difyResponse = item.json;\n\n// ドキュメントIDを取得\nconst documentId = difyResponse.document?.id || null;\nconst batch = difyResponse.batch || null;\n\nreturn [{\n  json: {\n    documentId: documentId,\n    batch: batch,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    status: 'indexing'\n  }\n}];"
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント準備').first().json;\nconst difyResponse = item.json;\n\n// ドキュメンチEDを取得\nconst documentId = difyResponse.document?.id || null;\nconst batch = difyResponse.batch || null;\n\nreturn [{\n  json: {\n    documentId: documentId,\n    batch: batch,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    status: 'indexing'\n  }\n}];"
       },
       "id": "get-document-id",
       "name": "ドキュメントID取得",
@@ -88,7 +83,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "=http://dify-api:5001/v1/datasets/YOUR_DATASET_ID/documents/{{ $json.batch }}/indexing-status",
+        "url": "=http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/documents/{{ $json.batch }}/indexing-status",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "options": {
@@ -100,12 +95,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
       "position": [1100, 0],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "dify-api-key",
-          "name": "Dify API Key"
-        }
-      }
+      "credentials": {}
     },
     {
       "parameters": {
@@ -147,7 +137,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメントID取得').first().json;\nconst statusData = item.json;\n\n// まだ処理中の場合\nconst status = statusData.data?.[0]?.indexing_status || 'unknown';\n\nif (status === 'indexing' || status === 'parsing') {\n  // 処理中 - 待機して再チェック（ループの代わりに警告を出力）\n  return [{\n    json: {\n      success: true,\n      fileName: prevData.fileName,\n      originalPath: prevData.originalPath,\n      documentId: prevData.documentId,\n      status: 'processing',\n      message: 'Document is still being processed. Check Dify console for status.',\n      processedAt: new Date().toISOString()\n    }\n  }];\n}\n\n// エラーの場合\nreturn [{\n  json: {\n    success: false,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    documentId: prevData.documentId,\n    status: status,\n    error: statusData.data?.[0]?.error || 'Unknown error',\n    processedAt: new Date().toISOString()\n  }\n}];"
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメントID取得').first().json;\nconst statusData = item.json;\n\n// まだ処理中の場合\nconst status = statusData.data?.[0]?.indexing_status || 'unknown';\n\nif (status === 'indexing' || status === 'parsing') {\n  // 処理中 - 待機して再チェック\n  return [{\n    json: {\n      success: true,\n      fileName: prevData.fileName,\n      originalPath: prevData.originalPath,\n      documentId: prevData.documentId,\n      status: 'processing',\n      message: 'Document is still being processed. Check Dify console for status.',\n      processedAt: new Date().toISOString()\n    }\n  }];\n}\n\n// エラーの場合\nreturn [{\n  json: {\n    success: false,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    documentId: prevData.documentId,\n    status: status,\n    error: statusData.data?.[0]?.error || 'Unknown error',\n    processedAt: new Date().toISOString()\n  }\n}];"
       },
       "id": "result-pending",
       "name": "処理中/エラー結果",

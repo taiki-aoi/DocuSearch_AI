@@ -15,193 +15,251 @@
       "id": "schedule-trigger",
       "name": "5分ごとに実行",
       "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.1,
+      "typeVersion": 1.2,
       "position": [0, 0]
     },
     {
       "parameters": {
-        "command": "find /watch/images -maxdepth 1 -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \\) -printf '{\"path\":\"%p\",\"name\":\"%f\",\"mtime\":\"%T@\"}\\n' 2>/dev/null || echo ''"
+        "operation": "read",
+        "fileSelector": "/watch/images/*.{jpg,jpeg,png,webp,heic,heif}",
+        "options": {}
       },
       "id": "list-images",
-      "name": "画像ファイル一覧取得",
-      "type": "n8n-nodes-base.executeCommand",
+      "name": "画像ファイル一覧",
+      "type": "n8n-nodes-base.readWriteFile",
       "typeVersion": 1,
       "position": [220, -100]
     },
     {
       "parameters": {
-        "command": "find /watch/documents -maxdepth 1 -type f \\( -iname '*.pdf' -o -iname '*.docx' -o -iname '*.xlsx' -o -iname '*.txt' -o -iname '*.md' \\) -printf '{\"path\":\"%p\",\"name\":\"%f\",\"mtime\":\"%T@\"}\\n' 2>/dev/null || echo ''"
+        "operation": "read",
+        "fileSelector": "/watch/documents/*.{txt,md,mdx,pdf,html,htm,xlsx,xls,docx,csv,vtt,properties}",
+        "options": {}
       },
       "id": "list-documents",
-      "name": "ドキュメント一覧取得",
-      "type": "n8n-nodes-base.executeCommand",
+      "name": "ドキュメント一覧",
+      "type": "n8n-nodes-base.readWriteFile",
       "typeVersion": 1,
       "position": [220, 100]
     },
     {
       "parameters": {
-        "jsCode": "// 画像ファイル一覧をパース\nconst item = $input.first();\nconst stdout = item.json.stdout || '';\nconst lines = stdout.trim().split('\\n').filter(line => line.trim());\n\nconst items = [];\nfor (const line of lines) {\n  try {\n    const fileInfo = JSON.parse(line);\n    items.push({ json: fileInfo });\n  } catch (e) {\n    // パースエラーは無視\n  }\n}\n\nreturn items.length > 0 ? items : [{ json: { empty: true } }];"
+        "jsCode": "// 処理済みファイルをチェックし、新規ファイルと削除されたファイルを検出\nconst processedKey = 'docusearch_processed_images';\nconst stored = $getWorkflowStaticData('global');\n\n// 初回実行時またはリセット時：Static Dataをクリア\nif (!stored._initialized_images) {\n  delete stored[processedKey];\n  stored._initialized_images = true;\n}\n\nlet processedFiles = stored[processedKey] || {};\n\nconst items = $input.all();\nconst currentFiles = new Set();\nconst newItems = [];\n\n// 現在のファイル一覧を取得\nfor (const item of items) {\n  const fileName = item.binary?.data?.fileName || item.json.fileName || 'unknown';\n  currentFiles.add(fileName);\n  \n  if (!processedFiles[fileName]) {\n    // 新規ファイル\n    newItems.push({\n      json: {\n        path: `/watch/images/${fileName}`,\n        name: fileName,\n        type: 'image',\n        action: 'add'\n      },\n      binary: item.binary\n    });\n  }\n}\n\n// 削除されたファイルを検出\nconst deletedItems = [];\nfor (const [fileName, info] of Object.entries(processedFiles)) {\n  if (!currentFiles.has(fileName) && info.documentId) {\n    deletedItems.push({\n      json: {\n        name: fileName,\n        type: 'image',\n        action: 'delete',\n        documentId: info.documentId\n      }\n    });\n  }\n}\n\n// 結果を結合して返す\nconst result = [...newItems, ...deletedItems];\nif (result.length === 0) {\n  return [];\n}\nreturn result;"
       },
-      "id": "parse-images",
-      "name": "画像一覧パース",
+      "id": "filter-new-images",
+      "name": "新規・削除画像フィルタ",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [440, -100]
     },
     {
       "parameters": {
-        "jsCode": "// ドキュメントファイル一覧をパース\nconst item = $input.first();\nconst stdout = item.json.stdout || '';\nconst lines = stdout.trim().split('\\n').filter(line => line.trim());\n\nconst items = [];\nfor (const line of lines) {\n  try {\n    const fileInfo = JSON.parse(line);\n    items.push({ json: fileInfo });\n  } catch (e) {\n    // パースエラーは無視\n  }\n}\n\nreturn items.length > 0 ? items : [{ json: { empty: true } }];"
+        "jsCode": "// 処理済みファイルをチェックし、新規ファイルと削除されたファイルを検出\nconst processedKey = 'docusearch_processed_docs';\nconst stored = $getWorkflowStaticData('global');\n\n// 初回実行時またはリセット時：Static Dataをクリア\nif (!stored._initialized_docs) {\n  delete stored[processedKey];\n  stored._initialized_docs = true;\n}\n\nlet processedFiles = stored[processedKey] || {};\n\nconst items = $input.all();\nconst currentFiles = new Set();\nconst newItems = [];\n\n// 現在のファイル一覧を取得\nfor (const item of items) {\n  const fileName = item.binary?.data?.fileName || item.json.fileName || 'unknown';\n  currentFiles.add(fileName);\n  \n  if (!processedFiles[fileName]) {\n    // 新規ファイル\n    newItems.push({\n      json: {\n        path: `/watch/documents/${fileName}`,\n        name: fileName,\n        type: 'document',\n        action: 'add'\n      },\n      binary: item.binary\n    });\n  }\n}\n\n// 削除されたファイルを検出\nconst deletedItems = [];\nfor (const [fileName, info] of Object.entries(processedFiles)) {\n  if (!currentFiles.has(fileName) && info.documentId) {\n    deletedItems.push({\n      json: {\n        name: fileName,\n        type: 'document',\n        action: 'delete',\n        documentId: info.documentId\n      }\n    });\n  }\n}\n\n// 結果を結合して返す\nconst result = [...newItems, ...deletedItems];\nif (result.length === 0) {\n  return [];\n}\nreturn result;"
       },
-      "id": "parse-documents",
-      "name": "ドキュメント一覧パース",
+      "id": "filter-new-docs",
+      "name": "新規・削除ドキュメントフィルタ",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [440, 100]
     },
     {
       "parameters": {
-        "jsCode": "// 処理済みファイルをチェック\nconst processedKey = 'docusearch_processed_images';\nconst stored = $getWorkflowStaticData('global');\nlet processedFiles = stored[processedKey] || {};\n\nconst items = $input.all();\nconst newItems = [];\n\nfor (const item of items) {\n  if (item.json.empty) continue;\n  \n  const filePath = item.json.path;\n  const mtime = item.json.mtime;\n  const fileKey = `${filePath}_${mtime}`;\n  \n  // 未処理のファイルのみ通過\n  if (!processedFiles[fileKey]) {\n    newItems.push(item);\n  }\n}\n\nreturn newItems.length > 0 ? newItems : [];"
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.action }}",
+              "value2": "add"
+            }
+          ]
+        }
       },
-      "id": "filter-new-images",
-      "name": "新規画像フィルタ",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "switch-image-action",
+      "name": "画像アクション分岐",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
       "position": [660, -100]
     },
     {
       "parameters": {
-        "jsCode": "// 処理済みファイルをチェック\nconst processedKey = 'docusearch_processed_docs';\nconst stored = $getWorkflowStaticData('global');\nlet processedFiles = stored[processedKey] || {};\n\nconst items = $input.all();\nconst newItems = [];\n\nfor (const item of items) {\n  if (item.json.empty) continue;\n  \n  const filePath = item.json.path;\n  const mtime = item.json.mtime;\n  const fileKey = `${filePath}_${mtime}`;\n  \n  // 未処理のファイルのみ通過\n  if (!processedFiles[fileKey]) {\n    newItems.push(item);\n  }\n}\n\nreturn newItems.length > 0 ? newItems : [];"
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.action }}",
+              "value2": "add"
+            }
+          ]
+        }
       },
-      "id": "filter-new-docs",
-      "name": "新規ドキュメントフィルタ",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "switch-doc-action",
+      "name": "ドキュメントアクション分岐",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
       "position": [660, 100]
     },
     {
       "parameters": {
-        "filePath": "={{ $json.path }}",
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "Y5ozVouW0FucbktH",
+          "mode": "id"
+        },
+        "mode": "each",
         "options": {}
       },
-      "id": "read-image",
-      "name": "画像読み込み",
-      "type": "n8n-nodes-base.readBinaryFile",
-      "typeVersion": 1,
-      "position": [880, -100]
-    },
-    {
-      "parameters": {
-        "filePath": "={{ $json.path }}",
-        "options": {}
-      },
-      "id": "read-document",
-      "name": "ドキュメント読み込み",
-      "type": "n8n-nodes-base.readBinaryFile",
-      "typeVersion": 1,
-      "position": [880, 100]
+      "id": "call-image-processor",
+      "name": "画像処理呼出",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [880, -200]
     },
     {
       "parameters": {
         "source": "database",
-        "workflowId": "={{ $env.IMAGE_PROCESSING_WORKFLOW_ID }}",
+        "workflowId": {
+          "__rl": true,
+          "value": "JIdvSmJAWxtHOPJH",
+          "mode": "id"
+        },
+        "mode": "each",
         "options": {}
       },
-      "id": "call-image-processor",
-      "name": "画像処理ワークフロー呼出",
+      "id": "call-document-processor",
+      "name": "ドキュメント処理呼出",
       "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.1,
+      "typeVersion": 1.2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/documents/{{ $json.documentId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "delete-image-from-dify",
+      "name": "Difyから画像削除",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, -100],
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/documents/{{ $json.documentId }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "delete-doc-from-dify",
+      "name": "Difyからドキュメント削除",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 100],
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "jsCode": "// 処理済みファイルを記録（画像）- documentIdも保存\nconst processedKey = 'docusearch_processed_images';\nconst stored = $getWorkflowStaticData('global');\nlet processedFiles = stored[processedKey] || {};\n\nconst results = [];\nfor (const item of $input.all()) {\n  const fileName = item.json.fileName || item.json.name || 'unknown';\n  const documentId = item.json.documentId || item.json.document?.id || null;\n\n  processedFiles[fileName] = {\n    processedAt: new Date().toISOString(),\n    status: 'completed',\n    documentId: documentId\n  };\n\n  results.push({\n    json: {\n      success: true,\n      type: 'image',\n      action: 'add',\n      fileName: fileName,\n      documentId: documentId,\n      processedAt: new Date().toISOString()\n    }\n  });\n}\n\nstored[processedKey] = processedFiles;\nreturn results;"
+      },
+      "id": "mark-image-processed",
+      "name": "画像処理完了",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, -200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 処理済みファイルを記録（ドキュメント）- documentIdも保存\nconst processedKey = 'docusearch_processed_docs';\nconst stored = $getWorkflowStaticData('global');\nlet processedFiles = stored[processedKey] || {};\n\nconst results = [];\nfor (const item of $input.all()) {\n  const fileName = item.json.fileName || item.json.name || 'unknown';\n  const documentId = item.json.documentId || item.json.document?.id || null;\n\n  processedFiles[fileName] = {\n    processedAt: new Date().toISOString(),\n    status: 'completed',\n    documentId: documentId\n  };\n\n  results.push({\n    json: {\n      success: true,\n      type: 'document',\n      action: 'add',\n      fileName: fileName,\n      documentId: documentId,\n      processedAt: new Date().toISOString()\n    }\n  });\n}\n\nstored[processedKey] = processedFiles;\nreturn results;"
+      },
+      "id": "mark-doc-processed",
+      "name": "ドキュメント処理完了",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 削除済みファイルをStatic Dataから削除（画像）\nconst processedKey = 'docusearch_processed_images';\nconst stored = $getWorkflowStaticData('global');\nlet processedFiles = stored[processedKey] || {};\n\nconst results = [];\nfor (const item of $input.all()) {\n  const fileName = item.json.name || 'unknown';\n  const documentId = item.json.documentId;\n\n  if (processedFiles[fileName]) {\n    delete processedFiles[fileName];\n  }\n\n  results.push({\n    json: {\n      success: true,\n      type: 'image',\n      action: 'delete',\n      fileName: fileName,\n      documentId: documentId,\n      deletedAt: new Date().toISOString()\n    }\n  });\n}\n\nstored[processedKey] = processedFiles;\nreturn results;"
+      },
+      "id": "mark-image-deleted",
+      "name": "画像削除完了",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [1100, -100]
     },
     {
       "parameters": {
-        "source": "database",
-        "workflowId": "={{ $env.DOCUMENT_PROCESSING_WORKFLOW_ID }}",
-        "options": {}
+        "jsCode": "// 削除済みファイルをStatic Dataから削除（ドキュメント）\nconst processedKey = 'docusearch_processed_docs';\nconst stored = $getWorkflowStaticData('global');\nlet processedFiles = stored[processedKey] || {};\n\nconst results = [];\nfor (const item of $input.all()) {\n  const fileName = item.json.name || 'unknown';\n  const documentId = item.json.documentId;\n\n  if (processedFiles[fileName]) {\n    delete processedFiles[fileName];\n  }\n\n  results.push({\n    json: {\n      success: true,\n      type: 'document',\n      action: 'delete',\n      fileName: fileName,\n      documentId: documentId,\n      deletedAt: new Date().toISOString()\n    }\n  });\n}\n\nstored[processedKey] = processedFiles;\nreturn results;"
       },
-      "id": "call-document-processor",
-      "name": "ドキュメント処理ワークフロー呼出",
-      "type": "n8n-nodes-base.executeWorkflow",
-      "typeVersion": 1.1,
+      "id": "mark-doc-deleted",
+      "name": "ドキュメント削除完了",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [1100, 100]
-    },
-    {
-      "parameters": {
-        "jsCode": "// 処理済みファイルを記録（画像）\nconst processedKey = 'docusearch_processed_images';\nconst stored = $getWorkflowStaticData('global');\nlet processedFiles = stored[processedKey] || {};\n\nconst item = $input.first();\nconst originalData = $('画像読み込み').first().json;\nconst filePath = originalData.path || item.json.originalPath;\nconst mtime = originalData.mtime || Date.now();\nconst fileKey = `${filePath}_${mtime}`;\n\nprocessedFiles[fileKey] = {\n  processedAt: new Date().toISOString(),\n  status: 'completed'\n};\n\nstored[processedKey] = processedFiles;\n\nreturn [{\n  json: {\n    ...item.json,\n    marked: true\n  }\n}];"
-      },
-      "id": "mark-image-processed",
-      "name": "画像処理済みマーク",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1320, -100]
-    },
-    {
-      "parameters": {
-        "jsCode": "// 処理済みファイルを記録（ドキュメント）\nconst processedKey = 'docusearch_processed_docs';\nconst stored = $getWorkflowStaticData('global');\nlet processedFiles = stored[processedKey] || {};\n\nconst item = $input.first();\nconst originalData = $('ドキュメント読み込み').first().json;\nconst filePath = originalData.path || item.json.originalPath;\nconst mtime = originalData.mtime || Date.now();\nconst fileKey = `${filePath}_${mtime}`;\n\nprocessedFiles[fileKey] = {\n  processedAt: new Date().toISOString(),\n  status: 'completed'\n};\n\nstored[processedKey] = processedFiles;\n\nreturn [{\n  json: {\n    ...item.json,\n    marked: true\n  }\n}];"
-      },
-      "id": "mark-doc-processed",
-      "name": "ドキュメント処理済みマーク",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1320, 100]
     }
   ],
   "connections": {
     "5分ごとに実行": {
       "main": [
         [
-          { "node": "画像ファイル一覧取得", "type": "main", "index": 0 },
-          { "node": "ドキュメント一覧取得", "type": "main", "index": 0 }
+          { "node": "画像ファイル一覧", "type": "main", "index": 0 },
+          { "node": "ドキュメント一覧", "type": "main", "index": 0 }
         ]
       ]
     },
-    "画像ファイル一覧取得": {
+    "画像ファイル一覧": {
       "main": [
-        [{ "node": "画像一覧パース", "type": "main", "index": 0 }]
+        [{ "node": "新規・削除画像フィルタ", "type": "main", "index": 0 }]
       ]
     },
-    "ドキュメント一覧取得": {
+    "ドキュメント一覧": {
       "main": [
-        [{ "node": "ドキュメント一覧パース", "type": "main", "index": 0 }]
+        [{ "node": "新規・削除ドキュメントフィルタ", "type": "main", "index": 0 }]
       ]
     },
-    "画像一覧パース": {
+    "新規・削除画像フィルタ": {
       "main": [
-        [{ "node": "新規画像フィルタ", "type": "main", "index": 0 }]
+        [{ "node": "画像アクション分岐", "type": "main", "index": 0 }]
       ]
     },
-    "ドキュメント一覧パース": {
+    "新規・削除ドキュメントフィルタ": {
       "main": [
-        [{ "node": "新規ドキュメントフィルタ", "type": "main", "index": 0 }]
+        [{ "node": "ドキュメントアクション分岐", "type": "main", "index": 0 }]
       ]
     },
-    "新規画像フィルタ": {
+    "画像アクション分岐": {
       "main": [
-        [{ "node": "画像読み込み", "type": "main", "index": 0 }]
+        [{ "node": "画像処理呼出", "type": "main", "index": 0 }],
+        [{ "node": "Difyから画像削除", "type": "main", "index": 0 }]
       ]
     },
-    "新規ドキュメントフィルタ": {
+    "ドキュメントアクション分岐": {
       "main": [
-        [{ "node": "ドキュメント読み込み", "type": "main", "index": 0 }]
+        [{ "node": "ドキュメント処理呼出", "type": "main", "index": 0 }],
+        [{ "node": "Difyからドキュメント削除", "type": "main", "index": 0 }]
       ]
     },
-    "画像読み込み": {
+    "画像処理呼出": {
       "main": [
-        [{ "node": "画像処理ワークフロー呼出", "type": "main", "index": 0 }]
+        [{ "node": "画像処理完了", "type": "main", "index": 0 }]
       ]
     },
-    "ドキュメント読み込み": {
+    "ドキュメント処理呼出": {
       "main": [
-        [{ "node": "ドキュメント処理ワークフロー呼出", "type": "main", "index": 0 }]
+        [{ "node": "ドキュメント処理完了", "type": "main", "index": 0 }]
       ]
     },
-    "画像処理ワークフロー呼出": {
+    "Difyから画像削除": {
       "main": [
-        [{ "node": "画像処理済みマーク", "type": "main", "index": 0 }]
+        [{ "node": "画像削除完了", "type": "main", "index": 0 }]
       ]
     },
-    "ドキュメント処理ワークフロー呼出": {
+    "Difyからドキュメント削除": {
       "main": [
-        [{ "node": "ドキュメント処理済みマーク", "type": "main", "index": 0 }]
+        [{ "node": "ドキュメント削除完了", "type": "main", "index": 0 }]
       ]
     }
   },

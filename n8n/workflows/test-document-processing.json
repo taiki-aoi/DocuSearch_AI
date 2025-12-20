@@ -1,0 +1,132 @@
+{
+  "name": "TEST - Document Processing",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "manual-trigger",
+      "name": "手動実衁E,
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "filePath": "/watch/documents/test.txt",
+        "options": {}
+      },
+      "id": "read-test-file",
+      "name": "チE��トファイル読み込み",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ドキュメント情報を準備\nconst item = $input.first();\nconst binaryData = item.binary?.data;\n\nif (!binaryData) {\n  return [{\n    json: {\n      error: 'No binary data found',\n      success: false\n    }\n  }];\n}\n\nconst fileName = binaryData.fileName || item.json.name || 'unknown';\nconst mimeType = binaryData.mimeType || 'application/octet-stream';\nconst fileSize = binaryData.fileSize || 0;\n\n// ファイル拡張子を取得\nconst ext = fileName.split('.').pop()?.toLowerCase() || '';\n\n// MIMEタイプ�Eマッピング\nconst mimeMap = {\n  'pdf': 'application/pdf',\n  'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',\n  'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n  'txt': 'text/plain',\n  'md': 'text/markdown'\n};\n\nreturn [{\n  json: {\n    originalPath: item.json.path || '/watch/documents/test.pdf',\n    fileName: fileName,\n    extension: ext,\n    mimeType: mimeMap[ext] || mimeType,\n    fileSize: fileSize,\n    base64Data: binaryData.data\n  },\n  binary: item.binary\n}];"
+      },
+      "id": "prepare-document",
+      "name": "ドキュメント準備",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/document/create-by-file",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "file",
+              "parameterType": "formBinaryData",
+              "inputDataFieldName": "data"
+            },
+            {
+              "name": "data",
+              "parameterType": "formData",
+              "value": "={\"indexing_technique\":\"high_quality\",\"process_rule\":{\"mode\":\"automatic\",\"rules\":{\"pre_processing_rules\":[{\"id\":\"remove_extra_spaces\",\"enabled\":true},{\"id\":\"remove_urls_emails\",\"enabled\":false}],\"segmentation\":{\"separator\":\"###\",\"max_tokens\":800}}}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "dify-upload",
+      "name": "DifyファイルアチE�EローチE,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [660, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dataset-api-key",
+          "name": "Dataset API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント準備').first().json;\nconst difyResponse = item.json;\n\n// ドキュメンチEDを取得\nconst documentId = difyResponse.document?.id || null;\nconst batch = difyResponse.batch || null;\n\nreturn [{\n  json: {\n    documentId: documentId,\n    batch: batch,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    status: 'indexing',\n    difyResponse: difyResponse\n  }\n}];"
+      },
+      "id": "get-document-id",
+      "name": "ドキュメンチED取征E,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\n\nreturn [{\n  json: {\n    success: true,\n    message: 'Document uploaded to Dify successfully',\n    fileName: item.json.fileName,\n    documentId: item.json.documentId,\n    batch: item.json.batch,\n    processedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "result",
+      "name": "チE��ト結果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    }
+  ],
+  "connections": {
+    "手動実衁E: {
+      "main": [
+        [{ "node": "チE��トファイル読み込み", "type": "main", "index": 0 }]
+      ]
+    },
+    "チE��トファイル読み込み": {
+      "main": [
+        [{ "node": "ドキュメント準備", "type": "main", "index": 0 }]
+      ]
+    },
+    "ドキュメント準備": {
+      "main": [
+        [{ "node": "DifyファイルアチE�EローチE, "type": "main", "index": 0 }]
+      ]
+    },
+    "DifyファイルアチE�EローチE: {
+      "main": [
+        [{ "node": "ドキュメンチED取征E, "type": "main", "index": 0 }]
+      ]
+    },
+    "ドキュメンチED取征E: {
+      "main": [
+        [{ "node": "チE��ト結果", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["docusearch", "test"]
+}

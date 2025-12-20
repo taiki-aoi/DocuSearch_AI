@@ -11,13 +11,24 @@
     },
     {
       "parameters": {
-        "jsCode": "// EXIF情報を抽出するコード\nconst item = $input.first();\nconst binaryData = item.binary?.data;\n\nif (!binaryData) {\n  return [{\n    json: {\n      ...item.json,\n      exif: { error: 'No binary data found', has_gps: false }\n    }\n  }];\n}\n\n// Base64データを取得\nconst base64Data = binaryData.data;\nconst fileName = binaryData.fileName || item.json.name || 'unknown.jpg';\n\n// EXIFデータの簡易解析（実際の運用ではPythonスクリプトを呼び出し推奨）\n// ここでは基本情報を返す\nconst result = {\n  json: {\n    originalPath: item.json.path,\n    fileName: fileName,\n    base64Data: base64Data,\n    mimeType: binaryData.mimeType || 'image/jpeg',\n    fileSize: binaryData.fileSize,\n    exif: {\n      datetime: null,\n      latitude: null,\n      longitude: null,\n      has_gps: false,\n      camera_make: null,\n      camera_model: null\n    }\n  }\n};\n\nreturn [result];"
+        "filePath": "={{ $json.path }}",
+        "options": {}
+      },
+      "id": "read-image-file",
+      "name": "画像ファイル読込",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// EXIF情報を抽出するコード（JPEG/TIFF対応）\nconst item = $input.first();\nconst binaryData = item.binary?.data;\nconst prevJson = $('ワークフロー開始').first().json;\n\nif (!binaryData) {\n  return [{\n    json: {\n      ...prevJson,\n      exif: { error: 'No binary data found', has_gps: false }\n    }\n  }];\n}\n\n// Base64データを取得\nconst binaryBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst base64String = binaryBuffer.toString('base64');\nconst fileName = binaryData.fileName || prevJson.name || 'unknown.jpg';\n\n// EXIF解析関数\nfunction parseExif(buffer) {\n  const result = {\n    datetime: null,\n    latitude: null,\n    longitude: null,\n    has_gps: false,\n    camera_make: null,\n    camera_model: null\n  };\n\n  try {\n    // JPEGマーカーを確認\n    if (buffer[0] !== 0xFF || buffer[1] !== 0xD8) {\n      return result; // JPEGではない\n    }\n\n    let offset = 2;\n    while (offset < buffer.length - 1) {\n      if (buffer[offset] !== 0xFF) {\n        offset++;\n        continue;\n      }\n\n      const marker = buffer[offset + 1];\n      \n      // APP1マーカー（EXIF）\n      if (marker === 0xE1) {\n        const length = (buffer[offset + 2] << 8) | buffer[offset + 3];\n        const exifData = buffer.slice(offset + 4, offset + 2 + length);\n        \n        // 'Exif\\0\\0'を確認\n        if (exifData[0] === 0x45 && exifData[1] === 0x78 && \n            exifData[2] === 0x69 && exifData[3] === 0x66) {\n          parseExifData(exifData.slice(6), result);\n        }\n        break;\n      }\n      \n      // SOSマーカー（画像データ開始）に達したら終了\n      if (marker === 0xDA) break;\n      \n      const segmentLength = (buffer[offset + 2] << 8) | buffer[offset + 3];\n      offset += 2 + segmentLength;\n    }\n  } catch (e) {\n    result.error = e.message;\n  }\n\n  return result;\n}\n\nfunction parseExifData(data, result) {\n  // エンディアン判定\n  const littleEndian = data[0] === 0x49; // 'II'\n  \n  function readUint16(pos) {\n    return littleEndian \n      ? data[pos] | (data[pos + 1] << 8)\n      : (data[pos] << 8) | data[pos + 1];\n  }\n  \n  function readUint32(pos) {\n    return littleEndian\n      ? data[pos] | (data[pos + 1] << 8) | (data[pos + 2] << 16) | (data[pos + 3] << 24)\n      : (data[pos] << 24) | (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3];\n  }\n  \n  function readRational(pos) {\n    const num = readUint32(pos);\n    const den = readUint32(pos + 4);\n    return den !== 0 ? num / den : 0;\n  }\n  \n  function readString(pos, len) {\n    let str = '';\n    for (let i = 0; i < len && data[pos + i] !== 0; i++) {\n      str += String.fromCharCode(data[pos + i]);\n    }\n    return str.trim();\n  }\n  \n  function convertGPS(degrees, minutes, seconds, ref) {\n    let decimal = degrees + minutes / 60 + seconds / 3600;\n    if (ref === 'S' || ref === 'W') decimal = -decimal;\n    return decimal;\n  }\n\n  // IFD0を解析\n  const ifd0Offset = readUint32(4);\n  let gpsIfdOffset = null;\n  let exifIfdOffset = null;\n  \n  function parseIFD(ifdOffset, isGPS = false) {\n    const numEntries = readUint16(ifdOffset);\n    let gpsLatRef = 'N', gpsLonRef = 'E';\n    let gpsLat = null, gpsLon = null;\n    \n    for (let i = 0; i < numEntries; i++) {\n      const entryOffset = ifdOffset + 2 + i * 12;\n      const tag = readUint16(entryOffset);\n      const type = readUint16(entryOffset + 2);\n      const count = readUint32(entryOffset + 4);\n      let valueOffset = entryOffset + 8;\n      \n      // 値が4バイトを超える場合はオフセットを読む\n      const typeSize = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8][type] || 1;\n      if (count * typeSize > 4) {\n        valueOffset = readUint32(entryOffset + 8);\n      }\n      \n      if (isGPS) {\n        // GPS IFD\n        if (tag === 0x01) gpsLatRef = readString(valueOffset, 1); // GPSLatitudeRef\n        if (tag === 0x03) gpsLonRef = readString(valueOffset, 1); // GPSLongitudeRef\n        if (tag === 0x02) { // GPSLatitude\n          gpsLat = [readRational(valueOffset), readRational(valueOffset + 8), readRational(valueOffset + 16)];\n        }\n        if (tag === 0x04) { // GPSLongitude\n          gpsLon = [readRational(valueOffset), readRational(valueOffset + 8), readRational(valueOffset + 16)];\n        }\n      } else {\n        // IFD0 / ExifIFD\n        if (tag === 0x010F) result.camera_make = readString(valueOffset, count); // Make\n        if (tag === 0x0110) result.camera_model = readString(valueOffset, count); // Model\n        if (tag === 0x0132) result.datetime = readString(valueOffset, count); // DateTime\n        if (tag === 0x9003) result.datetime = readString(valueOffset, count); // DateTimeOriginal (優先)\n        if (tag === 0x8825) gpsIfdOffset = readUint32(valueOffset); // GPSInfoIFDPointer\n        if (tag === 0x8769) exifIfdOffset = readUint32(valueOffset); // ExifIFDPointer\n      }\n    }\n    \n    if (isGPS && gpsLat && gpsLon) {\n      result.latitude = convertGPS(gpsLat[0], gpsLat[1], gpsLat[2], gpsLatRef);\n      result.longitude = convertGPS(gpsLon[0], gpsLon[1], gpsLon[2], gpsLonRef);\n      result.has_gps = true;\n    }\n  }\n  \n  parseIFD(ifd0Offset);\n  if (exifIfdOffset) parseIFD(exifIfdOffset);\n  if (gpsIfdOffset) parseIFD(gpsIfdOffset, true);\n}\n\n// EXIF解析実行\nconst exifResult = parseExif(binaryBuffer);\n\nconst result = {\n  json: {\n    originalPath: prevJson.path,\n    fileName: fileName,\n    base64Data: base64String,\n    mimeType: binaryData.mimeType || 'image/jpeg',\n    fileSize: binaryData.fileSize,\n    exif: exifResult\n  }\n};\n\nreturn [result];"
       },
       "id": "extract-exif",
       "name": "EXIF抽出",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [220, 0]
+      "position": [440, 0]
     },
     {
       "parameters": {
@@ -45,7 +56,7 @@
       "name": "GPS有無チェック",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [440, 0]
+      "position": [660, 0]
     },
     {
       "parameters": {
@@ -75,7 +86,7 @@
       "name": "ジオコーディング",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [660, -100],
+      "position": [880, -100],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 2000
@@ -88,7 +99,7 @@
       "name": "住所フォーマット",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, -100]
+      "position": [1100, -100]
     },
     {
       "parameters": {
@@ -98,15 +109,7 @@
       "name": "位置情報なし",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 100]
-    },
-    {
-      "parameters": {},
-      "id": "merge-location",
-      "name": "位置情報マージ",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 2.1,
-      "position": [1100, 0]
+      "position": [880, 100]
     },
     {
       "parameters": {
@@ -115,7 +118,7 @@
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
-            { "name": "key", "value": "YOUR_GEMINI_API_KEY" }
+            { "name": "key", "value": "={{ $env.GEMINI_API_KEY }}" }
           ]
         },
         "sendHeaders": true,
@@ -135,25 +138,25 @@
       "name": "Gemini Vision API",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1320, 0],
+      "position": [1540, 0],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first();\nconst prevData = $('位置情報マージ').first().json;\nconst geminiResponse = item.json;\n\n// Geminiレスポンスからキャプションを抽出\nlet caption = '';\ntry {\n  caption = geminiResponse.candidates[0].content.parts[0].text || '';\n} catch (e) {\n  caption = 'キャプション生成エラー';\n}\n\n// Dify用ドキュメントテキストを構築\nconst parts = [];\nparts.push(`■ファイル名: ${prevData.fileName}`);\n\nif (prevData.exif && prevData.exif.datetime) {\n  parts.push(`■撮影日時: ${prevData.exif.datetime}`);\n}\n\nif (prevData.location && prevData.location.formatted) {\n  parts.push(`■撮影場所: ${prevData.location.formatted}`);\n}\n\nif (prevData.exif && prevData.exif.latitude && prevData.exif.longitude) {\n  parts.push(`■座標: 緯度${prevData.exif.latitude}, 経度${prevData.exif.longitude}`);\n}\n\nif (prevData.exif && prevData.exif.camera_model) {\n  const camera = prevData.exif.camera_make \n    ? `${prevData.exif.camera_make} ${prevData.exif.camera_model}`\n    : prevData.exif.camera_model;\n  parts.push(`■カメラ: ${camera}`);\n}\n\nparts.push('■画像内容の説明:');\nparts.push(caption);\n\nconst documentText = parts.join('\\n');\n\nreturn [{\n  json: {\n    ...prevData,\n    visionCaption: caption,\n    documentText: documentText\n  }\n}];"
+        "jsCode": "const item = $input.first();\nconst geminiResponse = item.json;\n\n// 前のノードからデータを取得（住所フォーマット or 位置情報なし）\nlet prevData;\ntry {\n  prevData = $('住所フォーマット').first().json;\n} catch (e) {\n  try {\n    prevData = $('位置情報なし').first().json;\n  } catch (e2) {\n    prevData = $('EXIF抽出').first().json;\n  }\n}\n\n// Geminiレスポンスからキャプションを抽出\nlet caption = '';\ntry {\n  caption = geminiResponse.candidates[0].content.parts[0].text || '';\n} catch (e) {\n  caption = 'キャプション生成エラー';\n}\n\n// Dify用ドキュメントテキストを構築\nconst parts = [];\nparts.push(`■ファイル名: ${prevData.fileName}`);\n\nif (prevData.exif && prevData.exif.datetime) {\n  parts.push(`■撮影日時: ${prevData.exif.datetime}`);\n}\n\nif (prevData.location && prevData.location.formatted) {\n  parts.push(`■撮影場所: ${prevData.location.formatted}`);\n}\n\nif (prevData.exif && prevData.exif.latitude && prevData.exif.longitude) {\n  parts.push(`■座標: 緯度${prevData.exif.latitude}, 経度${prevData.exif.longitude}`);\n}\n\nif (prevData.exif && prevData.exif.camera_model) {\n  const camera = prevData.exif.camera_make \n    ? `${prevData.exif.camera_make} ${prevData.exif.camera_model}`\n    : prevData.exif.camera_model;\n  parts.push(`■カメラ: ${camera}`);\n}\n\nparts.push('■画像内容の説明:');\nparts.push(caption);\n\nconst documentText = parts.join('\\n');\n\nreturn [{\n  json: {\n    ...prevData,\n    visionCaption: caption,\n    documentText: documentText\n  }\n}];"
       },
       "id": "build-document",
       "name": "ドキュメント構築",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, 0]
+      "position": [1760, 0]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "http://dify-api:5001/v1/datasets/YOUR_DATASET_ID/document/create-by-text",
+        "url": "http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/document/create-by-text",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
@@ -173,14 +176,14 @@
       "name": "Dify登録",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1760, 0],
+      "position": [1980, 0],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 3000,
       "credentials": {
         "httpHeaderAuth": {
-          "id": "dify-api-key",
-          "name": "Dify API Key"
+          "id": "dataset-api-key",
+          "name": "Dataset API Key"
         }
       }
     },
@@ -192,11 +195,16 @@
       "name": "結果出力",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1980, 0]
+      "position": [2200, 0]
     }
   ],
   "connections": {
     "ワークフロー開始": {
+      "main": [
+        [{ "node": "画像ファイル読込", "type": "main", "index": 0 }]
+      ]
+    },
+    "画像ファイル読込": {
       "main": [
         [{ "node": "EXIF抽出", "type": "main", "index": 0 }]
       ]
@@ -219,15 +227,10 @@
     },
     "住所フォーマット": {
       "main": [
-        [{ "node": "位置情報マージ", "type": "main", "index": 0 }]
+        [{ "node": "Gemini Vision API", "type": "main", "index": 0 }]
       ]
     },
     "位置情報なし": {
-      "main": [
-        [{ "node": "位置情報マージ", "type": "main", "index": 1 }]
-      ]
-    },
-    "位置情報マージ": {
       "main": [
         [{ "node": "Gemini Vision API", "type": "main", "index": 0 }]
       ]

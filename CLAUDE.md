@@ -108,6 +108,15 @@ Required variables (copy `.env.example` to `.env`):
    - Combines metadata + caption into document
    - Uploads to Dify Knowledge Base
 
+## Important Configuration Notes
+
+### Embedding Model (Critical for Search Quality)
+
+- **Recommended:** `gemini-embedding-001` for Dify Knowledge Base
+- Default embedding models may have poor Japanese search accuracy
+- Configure in: Dify → Knowledge → Settings → Embedding Model
+- This significantly improves semantic search quality for Japanese content
+
 ## Design Documents
 
 All specifications are in Japanese:

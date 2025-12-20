@@ -1,0 +1,158 @@
+{
+  "name": "TEST - Image Processing",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "manual-trigger",
+      "name": "手動実衁E,
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "filePath": "/watch/images/test.jpg",
+        "options": {}
+      },
+      "id": "read-test-file",
+      "name": "チE��トファイル読み込み",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 入力データと画像�EBase64を取得\nconst item = $input.first();\nconst binaryData = item.binary?.data;\n\nif (!binaryData) {\n  throw new Error('No binary data found');\n}\n\n// Base64チE�Eタを正しく取得\nconst binaryBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst base64String = binaryBuffer.toString('base64');\nconst fileName = binaryData.fileName || 'test.jpg';\nconst mimeType = binaryData.mimeType || 'image/jpeg';\n\n// EXIFチE�Eタ�E�簡易版�E�\nconst result = {\n  json: {\n    originalPath: '/watch/images/test.jpg',\n    fileName: fileName,\n    base64Data: base64String,\n    mimeType: mimeType,\n    fileSize: binaryData.fileSize,\n    exif: {\n      datetime: null,\n      latitude: null,\n      longitude: null,\n      has_gps: false,\n      camera_make: null,\n      camera_model: null\n    },\n    location: {\n      formatted: '位置惁E��なぁE,\n      full: null,\n      raw: null\n    }\n  }\n};\n\nreturn [result];"
+      },
+      "id": "extract-exif",
+      "name": "EXIF抽出・チE�Eタ準備",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "key", "value": "={{ $env.GEMINI_API_KEY }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [\n      {\n        \"text\": \"こ�E画像を詳細に刁E��し、検索用のメタチE�Eタを作�Eしてください。以下�E点を含めて記述してください�E�\\n\\n1. 写ってぁE��物体（�E体的に�E�\\n   - 建物がある場合、その種類（�Eンション、ビル、戸建て、オフィス、商業施設など�E�\\n   - 車両がある場合、種類（乗用車、トラチE��、バイクなど�E�\\n   - 人物がいる場合、人数と状況E��ビジネス、カジュアル、イベントなど�E�\\n\\n2. シチュエーション・場面\\n   - 食事、会議、工事現場、旅行、イベント、日常など\\n   - 料理がある場合、ジャンル�E�イタリアン、和食、中華、カフェなど�E�\\n\\n3. 雰囲気や色味\\n   - 明るぁE��暗ぁE��モダン、レトロ、�EチE�E、落ち着ぁE��雰囲気など\\n\\n4. 読み取れる文字情報\\n   - 看板、書籍、掲示板など読める斁E��があれば記述\\n\\n5. 場所の推測\\n   - 屋�E/屋外、E�E币E郊夁E自然など\\n\\n出力�E日本語�E自然な斁E��で、検索キーワード化しやすい形式でお願いします、E"\n      },\n      {\n        \"inline_data\": {\n          \"mime_type\": \"{{ $json.mimeType }}\",\n          \"data\": \"{{ $json.base64Data }}\"\n        }\n      }\n    ]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.7,\n    \"maxOutputTokens\": 1024\n  }\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "gemini-vision",
+      "name": "Gemini Vision API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [660, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst prevData = $('EXIF抽出・チE�Eタ準備').first().json;\nconst geminiResponse = item.json;\n\n// Geminiレスポンスからキャプションを抽出\nlet caption = '';\ntry {\n  caption = geminiResponse.candidates[0].content.parts[0].text || '';\n} catch (e) {\n  caption = 'キャプション生�Eエラー: ' + e.message;\n}\n\n// Dify用ドキュメントテキストを構築\nconst parts = [];\nparts.push(`■ファイル吁E ${prevData.fileName}`);\n\nif (prevData.exif && prevData.exif.datetime) {\n  parts.push(`■撮影日晁E ${prevData.exif.datetime}`);\n}\n\nif (prevData.location && prevData.location.formatted) {\n  parts.push(`■撮影場所: ${prevData.location.formatted}`);\n}\n\nparts.push('■画像�E容の説昁E');\nparts.push(caption);\n\nconst documentText = parts.join('\\n');\n\nreturn [{\n  json: {\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    visionCaption: caption,\n    documentText: documentText\n  }\n}];"
+      },
+      "id": "build-document",
+      "name": "ドキュメント構篁E,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/document/create-by-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"name\": \"{{ $json.fileName }}\",\n  \"text\": {{ JSON.stringify($json.documentText) }},\n  \"indexing_technique\": \"high_quality\",\n  \"process_rule\": {\n    \"mode\": \"automatic\"\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "dify-index",
+      "name": "Dify登録",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1100, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dataset-api-key",
+          "name": "Dataset API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント構篁E).first().json;\nconst difyResponse = item.json;\n\nreturn [{\n  json: {\n    success: true,\n    message: 'Image processed and indexed successfully',\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    documentId: difyResponse.document?.id || null,\n    visionCaption: prevData.visionCaption,\n    processedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "result",
+      "name": "チE��ト結果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    }
+  ],
+  "connections": {
+    "手動実衁E: {
+      "main": [
+        [{ "node": "チE��トファイル読み込み", "type": "main", "index": 0 }]
+      ]
+    },
+    "チE��トファイル読み込み": {
+      "main": [
+        [{ "node": "EXIF抽出・チE�Eタ準備", "type": "main", "index": 0 }]
+      ]
+    },
+    "EXIF抽出・チE�Eタ準備": {
+      "main": [
+        [{ "node": "Gemini Vision API", "type": "main", "index": 0 }]
+      ]
+    },
+    "Gemini Vision API": {
+      "main": [
+        [{ "node": "ドキュメント構篁E, "type": "main", "index": 0 }]
+      ]
+    },
+    "ドキュメント構篁E: {
+      "main": [
+        [{ "node": "Dify登録", "type": "main", "index": 0 }]
+      ]
+    },
+    "Dify登録": {
+      "main": [
+        [{ "node": "チE��ト結果", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": ["docusearch", "test"]
+}
