@@ -35,7 +35,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/document/create-by-file",
+        "url": "http://dify-api:5001/v1/datasets/b6e67602-dbd0-4777-bf44-de9ab18a8a11/document/create-by-file",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,

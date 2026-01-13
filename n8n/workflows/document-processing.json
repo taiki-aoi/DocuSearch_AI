@@ -11,7 +11,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ドキュメント情報を準備\nconst item = $input.first();\nconst binaryData = item.binary?.data;\n\nif (!binaryData) {\n  return [{\n    json: {\n      error: 'No binary data found',\n      success: false\n    }\n  }];\n}\n\nconst fileName = binaryData.fileName || item.json.name || 'unknown';\nconst mimeType = binaryData.mimeType || 'application/octet-stream';\nconst fileSize = binaryData.fileSize || 0;\n\n// ファイル拡張子を取得\nconst ext = fileName.split('.').pop()?.toLowerCase() || '';\n\n// MIMEタイプ�Eマッピング\nconst mimeMap = {\n  'pdf': 'application/pdf',\n  'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',\n  'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',\n  'txt': 'text/plain',\n  'md': 'text/markdown'\n};\n\nreturn [{\n  json: {\n    originalPath: item.json.path,\n    fileName: fileName,\n    extension: ext,\n    mimeType: mimeMap[ext] || mimeType,\n    fileSize: fileSize,\n    base64Data: binaryData.data\n  },\n  binary: item.binary\n}];"
+        "jsCode": "// ドキュメント情報を準備\nconst item = $input.first();\nconst binaryData = item.binary?.data;\n\nif (!binaryData) {\n  return [{\n    json: {\n      error: 'No binary data found',\n      success: false\n    }\n  }];\n}\n\n// ファイル名を取得\nconst fileName = binaryData.fileName || item.json.name || 'unknown';\n\n// binaryData.directoryからフルパスを構築\nconst directory = binaryData.directory || item.json.directory || '/watch/documents';\nlet originalPath = `${directory}/${fileName}`;\n\n// 呼び出し元からpathが渡されている場合はそれを使用\nif (item.json.path) {\n  originalPath = item.json.path;\n}\n\n// 相対パスを生成（/watch/を除去）\nlet relativePath = item.json.relativePath;\nif (!relativePath) {\n  relativePath = originalPath.replace(/^\\/watch\\//, '');\n}\n\n// ファイル拡張子を取得\nconst ext = fileName.split('.').pop()?.toLowerCase() || '';\n\n// ファイルタイプを判定\nconst textExtensions = ['txt', 'md', 'mdx', 'csv', 'json', 'xml', 'html', 'htm', 'yaml', 'yml', 'properties'];\nconst isPdf = ext === 'pdf';\nconst isTextFile = textExtensions.includes(ext);\n\n// ファイルタイプ: 'text', 'pdf', 'binary'\nlet fileType = 'binary';\nif (isTextFile) fileType = 'text';\nelse if (isPdf) fileType = 'pdf';\n\n// バイナリバッファを取得\nconst binaryBuffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst base64String = binaryBuffer.toString('base64');\n\n// テキストファイルの場合はUTF-8としてデコード\nlet textContent = '';\nif (isTextFile) {\n  try {\n    textContent = binaryBuffer.toString('utf-8');\n  } catch (e) {\n    textContent = '';\n  }\n}\n\nreturn [{\n  json: {\n    originalPath: originalPath,\n    relativePath: relativePath,\n    fileName: fileName,\n    extension: ext,\n    fileType: fileType,\n    isTextFile: isTextFile,\n    isPdf: isPdf,\n    textContent: textContent,\n    base64Data: base64String,\n    mimeType: binaryData.mimeType || 'application/octet-stream',\n    fileSize: binaryData.fileSize || 0\n  },\n  binary: item.binary\n}];"
       },
       "id": "prepare-document",
       "name": "ドキュメント準備",
@@ -21,27 +21,187 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.fileType }}",
+              "value2": "text"
+            }
+          ]
+        }
+      },
+      "id": "check-is-text",
+      "name": "テキスト判定",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.fileType }}",
+              "value2": "pdf"
+            }
+          ]
+        }
+      },
+      "id": "check-is-pdf",
+      "name": "PDF判定",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [660, 100]
+    },
+    {
+      "parameters": {
         "method": "POST",
-        "url": "http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/document/create_by_file",
+        "url": "http://dify-api:5001/v1/datasets/b6e67602-dbd0-4777-bf44-de9ab18a8a11/document/create-by-text",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
-          "parameters": []
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
         },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"name\": \"{{ $json.relativePath }}\",\n  \"text\": \"■ファイル名: {{ $json.fileName }}\\n■ファイルパス: {{ $json.relativePath }}\\n■ファイルURL: http://localhost/docs/{{ encodeURI($json.relativePath) }}\\n\\n■内容:\\n\" + {{ JSON.stringify($json.textContent) }},\n  \"indexing_technique\": \"high_quality\",\n  \"process_rule\": {\n    \"mode\": \"automatic\"\n  }\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "dify-upload-text",
+      "name": "Difyテキスト登録",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [660, -100],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dataset-api-key",
+          "name": "Dataset API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// PDFのBase64データからGemini APIリクエストペイロードを構築\nconst item = $input.first();\nconst base64Data = item.json.base64Data;\nconst fileName = item.json.fileName;\n\nif (!base64Data) {\n  throw new Error('No base64Data found for PDF');\n}\n\n// Gemini APIリクエストペイロードを構築\nconst requestPayload = {\n  contents: [{\n    parts: [\n      {\n        text: `このPDFドキュメントの内容を詳細に抽出してください。\n\n## 出力形式\n以下の形式で構造化して出力してください：\n\n【文書種別】（契約書、見積書、物件情報、議事録、請求書、その他）\n\n【物件情報の場合】※該当する場合のみ\n・賃料: ○○円/月（管理費込みの場合は合計額も）\n・管理費/共益費: ○○円/月\n・敷金: ○ヶ月分\n・礼金: ○ヶ月分\n・所在地: 都道府県から番地まで\n・最寄駅: ○○線○○駅 徒歩○分\n・間取り: ○LDK等\n・専有面積: ○○㎡\n・築年数: ○年（築年月がわかれば記載）\n・階数: ○階/○階建て\n・構造: RC造、鉄骨造、木造など\n・設備: エアコン、バストイレ別、オートロック等\n\n【金額情報】※物件以外の文書の場合\n・合計金額: ○○円\n・内訳があれば記載\n\n【日付情報】\n・作成日/契約日/有効期限など\n\n【関係者情報】\n・会社名、担当者名、連絡先など\n\n【文書の要約】\n内容を2-3文で要約\n\n【検索キーワード】\nこの文書を検索するのに役立つキーワードをカンマ区切りで列挙\n\n【全文テキスト】\n読み取れる全ての文字情報を漏れなく記載`\n      },\n      {\n        inline_data: {\n          mime_type: \"application/pdf\",\n          data: base64Data\n        }\n      }\n    ]\n  }],\n  generationConfig: {\n    temperature: 0.3,\n    maxOutputTokens: 8192\n  }\n};\n\nreturn [{\n  json: {\n    ...item.json,\n    geminiPayload: requestPayload\n  }\n}];"
+      },
+      "id": "prepare-gemini-request",
+      "name": "Geminiリクエスト準備",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "key", "value": "={{ $env.GEMINI_API_KEY }}" }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.geminiPayload) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "gemini-pdf",
+      "name": "Gemini PDF処理",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1100, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Geminiの応答からテキストを抽出\nconst item = $input.first();\nconst geminiResponse = item.json;\nconst prevData = $('ドキュメント準備').first().json;\n\n// Geminiレスポンスからテキストを抽出\nlet extractedText = '';\ntry {\n  extractedText = geminiResponse.candidates[0].content.parts[0].text || '';\n} catch (e) {\n  extractedText = 'テキスト抽出エラー: ' + e.message;\n}\n\n// ファイルURLを生成（Nginx経由でアクセス可能）\nconst fileUrl = `http://localhost/docs/${encodeURI(prevData.relativePath)}`;\n\n// ドキュメントテキストを構築\nconst parts = [];\nparts.push(`■ファイル名: ${prevData.fileName}`);\nparts.push(`■ファイルパス: ${prevData.relativePath}`);\nparts.push(`■ファイルURL: ${fileUrl}`);\nparts.push('');\nparts.push('■抽出内容:');\nparts.push(extractedText);\n\nconst documentText = parts.join('\\n');\n\nreturn [{\n  json: {\n    ...prevData,\n    fileUrl: fileUrl,\n    extractedText: extractedText,\n    documentText: documentText\n  }\n}];"
+      },
+      "id": "build-pdf-document",
+      "name": "PDF文書構築",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dify-api:5001/v1/datasets/b6e67602-dbd0-4777-bf44-de9ab18a8a11/document/create-by-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"name\": \"{{ $json.relativePath }}\",\n  \"text\": {{ JSON.stringify($json.documentText) }},\n  \"indexing_technique\": \"high_quality\",\n  \"process_rule\": {\n    \"mode\": \"automatic\"\n  }\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "dify-upload-pdf-text",
+      "name": "DifyにPDFテキスト登録",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1540, 0],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dataset-api-key",
+          "name": "Dataset API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// バイナリデータのファイル名をアンダースコア形式に変更\nconst item = $input.first();\nconst relativePath = item.json.relativePath;\n\n// スラッシュをアンダースコアに置換\nconst safeFileName = relativePath.replace(/\\//g, '_');\n\n// バイナリデータのファイル名を変更\nif (item.binary && item.binary.data) {\n  item.binary.data.fileName = safeFileName;\n}\n\nreturn [{\n  json: {\n    ...item.json,\n    safeFileName: safeFileName\n  },\n  binary: item.binary\n}];"
+      },
+      "id": "rename-file",
+      "name": "ファイル名変更",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://dify-api:5001/v1/datasets/b6e67602-dbd0-4777-bf44-de9ab18a8a11/document/create_by_file",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "contentType": "multipart-form-data",
         "bodyParameters": {
           "parameters": [
             {
-              "name": "file",
               "parameterType": "formBinaryData",
+              "name": "file",
               "inputDataFieldName": "data"
             },
             {
-              "name": "data",
               "parameterType": "formData",
-              "value": "={\"indexing_technique\":\"high_quality\",\"process_rule\":{\"mode\":\"automatic\",\"rules\":{\"pre_processing_rules\":[{\"id\":\"remove_extra_spaces\",\"enabled\":true},{\"id\":\"remove_urls_emails\",\"enabled\":false}],\"segmentation\":{\"separator\":\"###\",\"max_tokens\":800}}}}"
+              "name": "data",
+              "value": "{\"indexing_technique\":\"high_quality\",\"process_rule\":{\"mode\":\"automatic\"}}"
             }
           ]
         },
@@ -49,109 +209,50 @@
           "timeout": 120000
         }
       },
-      "id": "dify-upload",
-      "name": "Difyファイルアップロード",
+      "id": "dify-upload-file",
+      "name": "Difyファイル登録",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [440, 0],
+      "position": [1100, 200],
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000,
-      "credentials": {}
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント準備').first().json;\nconst difyResponse = item.json;\n\n// ドキュメンチEDを取得\nconst documentId = difyResponse.document?.id || null;\nconst batch = difyResponse.batch || null;\n\nreturn [{\n  json: {\n    documentId: documentId,\n    batch: batch,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    status: 'indexing'\n  }\n}];"
-      },
-      "id": "get-document-id",
-      "name": "ドキュメントID取得",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [660, 0]
-    },
-    {
-      "parameters": {
-        "amount": 5,
-        "unit": "seconds"
-      },
-      "id": "wait-indexing",
-      "name": "インデックス待機",
-      "type": "n8n-nodes-base.wait",
-      "typeVersion": 1.1,
-      "position": [880, 0]
-    },
-    {
-      "parameters": {
-        "method": "GET",
-        "url": "=http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/documents/{{ $json.batch }}/indexing-status",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "options": {
-          "timeout": 30000
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dataset-api-key",
+          "name": "Dataset API Key"
         }
-      },
-      "id": "check-status",
-      "name": "ステータス確認",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [1100, 0],
-      "credentials": {}
+      }
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "loose"
-          },
-          "conditions": [
-            {
-              "id": "check-completed",
-              "leftValue": "={{ $json.data[0]?.indexing_status }}",
-              "rightValue": "completed",
-              "operator": {
-                "type": "string",
-                "operation": "equals"
-              }
-            }
-          ],
-          "combinator": "or"
-        }
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント準備').first().json;\nconst difyResponse = item.json;\n\nconst documentId = difyResponse.document?.id || null;\nconst batch = difyResponse.batch || null;\n\nreturn [{\n  json: {\n    success: true,\n    documentId: documentId,\n    batch: batch,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    relativePath: prevData.relativePath,\n    fileType: 'text',\n    status: 'completed',\n    processedAt: new Date().toISOString()\n  }\n}];"
       },
-      "id": "is-completed",
-      "name": "完了チェック",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [1320, 0]
-    },
-    {
-      "parameters": {
-        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメントID取得').first().json;\n\nreturn [{\n  json: {\n    success: true,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    documentId: prevData.documentId,\n    status: 'completed',\n    processedAt: new Date().toISOString()\n  }\n}];"
-      },
-      "id": "result-success",
-      "name": "成功結果",
+      "id": "result-text",
+      "name": "テキスト結果",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, -100]
+      "position": [880, -100]
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメントID取得').first().json;\nconst statusData = item.json;\n\n// まだ処理中の場合\nconst status = statusData.data?.[0]?.indexing_status || 'unknown';\n\nif (status === 'indexing' || status === 'parsing') {\n  // 処理中 - 待機して再チェック\n  return [{\n    json: {\n      success: true,\n      fileName: prevData.fileName,\n      originalPath: prevData.originalPath,\n      documentId: prevData.documentId,\n      status: 'processing',\n      message: 'Document is still being processed. Check Dify console for status.',\n      processedAt: new Date().toISOString()\n    }\n  }];\n}\n\n// エラーの場合\nreturn [{\n  json: {\n    success: false,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    documentId: prevData.documentId,\n    status: status,\n    error: statusData.data?.[0]?.error || 'Unknown error',\n    processedAt: new Date().toISOString()\n  }\n}];"
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント準備').first().json;\nconst difyResponse = item.json;\n\nconst documentId = difyResponse.document?.id || null;\nconst batch = difyResponse.batch || null;\n\nreturn [{\n  json: {\n    success: true,\n    documentId: documentId,\n    batch: batch,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    relativePath: prevData.relativePath,\n    fileType: 'pdf',\n    status: 'completed',\n    processedAt: new Date().toISOString()\n  }\n}];"
       },
-      "id": "result-pending",
-      "name": "処理中/エラー結果",
+      "id": "result-pdf",
+      "name": "PDF結果",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, 100]
-    },
-    {
-      "parameters": {},
-      "id": "merge-results",
-      "name": "結果マージ",
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 2.1,
       "position": [1760, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst prevData = $('ドキュメント準備').first().json;\nconst difyResponse = item.json;\n\nconst documentId = difyResponse.document?.id || null;\nconst batch = difyResponse.batch || null;\n\nreturn [{\n  json: {\n    success: true,\n    documentId: documentId,\n    batch: batch,\n    fileName: prevData.fileName,\n    originalPath: prevData.originalPath,\n    relativePath: prevData.relativePath,\n    fileType: 'binary',\n    status: 'completed',\n    processedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "result-file",
+      "name": "ファイル結果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 200]
     }
   ],
   "connections": {
@@ -162,43 +263,54 @@
     },
     "ドキュメント準備": {
       "main": [
-        [{ "node": "Difyファイルアップロード", "type": "main", "index": 0 }]
+        [{ "node": "テキスト判定", "type": "main", "index": 0 }]
       ]
     },
-    "Difyファイルアップロード": {
+    "テキスト判定": {
       "main": [
-        [{ "node": "ドキュメントID取得", "type": "main", "index": 0 }]
+        [{ "node": "Difyテキスト登録", "type": "main", "index": 0 }],
+        [{ "node": "PDF判定", "type": "main", "index": 0 }]
       ]
     },
-    "ドキュメントID取得": {
+    "PDF判定": {
       "main": [
-        [{ "node": "インデックス待機", "type": "main", "index": 0 }]
+        [{ "node": "Geminiリクエスト準備", "type": "main", "index": 0 }],
+        [{ "node": "ファイル名変更", "type": "main", "index": 0 }]
       ]
     },
-    "インデックス待機": {
+    "Geminiリクエスト準備": {
       "main": [
-        [{ "node": "ステータス確認", "type": "main", "index": 0 }]
+        [{ "node": "Gemini PDF処理", "type": "main", "index": 0 }]
       ]
     },
-    "ステータス確認": {
+    "Difyテキスト登録": {
       "main": [
-        [{ "node": "完了チェック", "type": "main", "index": 0 }]
+        [{ "node": "テキスト結果", "type": "main", "index": 0 }]
       ]
     },
-    "完了チェック": {
+    "Gemini PDF処理": {
       "main": [
-        [{ "node": "成功結果", "type": "main", "index": 0 }],
-        [{ "node": "処理中/エラー結果", "type": "main", "index": 0 }]
+        [{ "node": "PDF文書構築", "type": "main", "index": 0 }]
       ]
     },
-    "成功結果": {
+    "PDF文書構築": {
       "main": [
-        [{ "node": "結果マージ", "type": "main", "index": 0 }]
+        [{ "node": "DifyにPDFテキスト登録", "type": "main", "index": 0 }]
       ]
     },
-    "処理中/エラー結果": {
+    "DifyにPDFテキスト登録": {
       "main": [
-        [{ "node": "結果マージ", "type": "main", "index": 1 }]
+        [{ "node": "PDF結果", "type": "main", "index": 0 }]
+      ]
+    },
+    "ファイル名変更": {
+      "main": [
+        [{ "node": "Difyファイル登録", "type": "main", "index": 0 }]
+      ]
+    },
+    "Difyファイル登録": {
+      "main": [
+        [{ "node": "ファイル結果", "type": "main", "index": 0 }]
       ]
     }
   },

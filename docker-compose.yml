@@ -325,6 +325,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./watch:/watch:ro
     ports:
       - "80:80"
     depends_on:

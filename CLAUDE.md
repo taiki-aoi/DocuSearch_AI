@@ -90,6 +90,41 @@ Required variables (copy `.env.example` to `.env`):
 - `N8N_ENCRYPTION_KEY` - n8n encryption key (24+ chars)
 - `GEMINI_API_KEY` - Gemini API key for vision analysis
 
+## Document Processing Pipeline
+
+The system processes files differently based on type:
+
+### Text Files (.txt, .md, .csv, etc.)
+
+- Direct text extraction
+- Uploaded via Dify `create-by-text` API
+
+### PDF Files (including scanned documents)
+
+- **Gemini 2.5 Flash Vision API** processes PDFs directly
+- Extracts text from both native PDFs and scanned image-based PDFs
+- OCR is handled by Gemini (no additional OCR service needed)
+- Extracted text uploaded via Dify `create-by-text` API
+
+### Other Binary Files (.docx, .xlsx, etc.)
+
+- Uploaded via Dify `create_by_file` API
+- Dify handles parsing internally
+
+### n8n Workflow: Document Processing
+
+Location: `n8n/workflows/document-processing.json`
+
+Flow:
+
+```text
+File → ドキュメント準備 → テキスト判定
+                           ├─ Text → Difyテキスト登録
+                           └─ Not Text → PDF判定
+                                          ├─ PDF → Gemini PDF処理 → DifyにPDFテキスト登録
+                                          └─ Binary → Difyファイル登録
+```
+
 ## Image Processing Pipeline
 
 1. **EXIF Extraction** (`exif_extractor.py`)

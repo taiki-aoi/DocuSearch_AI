@@ -113,8 +113,18 @@
     },
     {
       "parameters": {
+        "jsCode": "// 画像のBase64データからGemini APIリクエストペイロードを構築\n// 前のノードからデータを取得（住所フォーマット or 位置情報なし）\nlet prevData;\ntry {\n  prevData = $('住所フォーマット').first().json;\n} catch (e) {\n  try {\n    prevData = $('位置情報なし').first().json;\n  } catch (e2) {\n    prevData = $('EXIF抽出').first().json;\n  }\n}\n\nconst base64Data = prevData.base64Data;\nconst mimeType = prevData.mimeType || 'image/jpeg';\n\nif (!base64Data) {\n  throw new Error('No base64Data found for image');\n}\n\n// Gemini APIリクエストペイロードを構築\nconst requestPayload = {\n  contents: [{\n    parts: [\n      {\n        text: `この画像を詳細に分析し、検索用のメタデータを作成してください。以下の点を含めて記述してください：\n\n1. 写っている物体（具体的に）\n   - 建物がある場合、その種類（マンション、ビル、戸建て、オフィス、商業施設など）\n   - 車両がある場合、種類（乗用車、トラック、バイクなど）\n   - 人物がいる場合、人数と状況（ビジネス、カジュアル、イベントなど）\n\n2. シチュエーション・場面\n   - 食事、会議、工事現場、旅行、イベント、日常など\n   - 料理がある場合、ジャンル（イタリアン、和食、中華、カフェなど）\n\n3. 雰囲気や色味\n   - 明るい、暗い、モダン、レトロ、ポップ、落ち着いた雰囲気など\n\n4. 読み取れる文字情報\n   - 看板、書籍、掲示板など読める文字があれば記述\n\n5. 場所の推測\n   - 屋内/屋外、都市/郊外/自然など\n\n出力は日本語の自然な文章で、検索キーワード化しやすい形式でお願いします。`\n      },\n      {\n        inline_data: {\n          mime_type: mimeType,\n          data: base64Data\n        }\n      }\n    ]\n  }],\n  generationConfig: {\n    temperature: 0.7,\n    maxOutputTokens: 1024\n  }\n};\n\nreturn [{\n  json: {\n    ...prevData,\n    geminiPayload: requestPayload\n  }\n}];"
+      },
+      "id": "prepare-gemini-image",
+      "name": "Geminiリクエスト準備",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
         "method": "POST",
-        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
@@ -129,7 +139,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"contents\": [{\n    \"parts\": [\n      {\n        \"text\": \"この画像を詳細に分析し、検索用のメタデータを作成してください。以下の点を含めて記述してください：\\n\\n1. 写っている物体（具体的に）\\n   - 建物がある場合、その種類（マンション、ビル、戸建て、オフィス、商業施設など）\\n   - 車両がある場合、種類（乗用車、トラック、バイクなど）\\n   - 人物がいる場合、人数と状況（ビジネス、カジュアル、イベントなど）\\n\\n2. シチュエーション・場面\\n   - 食事、会議、工事現場、旅行、イベント、日常など\\n   - 料理がある場合、ジャンル（イタリアン、和食、中華、カフェなど）\\n\\n3. 雰囲気や色味\\n   - 明るい、暗い、モダン、レトロ、ポップ、落ち着いた雰囲気など\\n\\n4. 読み取れる文字情報\\n   - 看板、書籍、掲示板など読める文字があれば記述\\n\\n5. 場所の推測\\n   - 屋内/屋外、都市/郊外/自然など\\n\\n出力は日本語の自然な文章で、検索キーワード化しやすい形式でお願いします。\"\n      },\n      {\n        \"inline_data\": {\n          \"mime_type\": \"{{ $json.mimeType }}\",\n          \"data\": \"{{ $json.base64Data }}\"\n        }\n      }\n    ]\n  }],\n  \"generationConfig\": {\n    \"temperature\": 0.7,\n    \"maxOutputTokens\": 1024\n  }\n}",
+        "jsonBody": "={{ JSON.stringify($json.geminiPayload) }}",
         "options": {
           "timeout": 60000
         }
@@ -156,7 +166,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://dify-api:5001/v1/datasets/c099198f-c9ea-48d6-b194-6beac4d336be/document/create-by-text",
+        "url": "http://dify-api:5001/v1/datasets/b6e67602-dbd0-4777-bf44-de9ab18a8a11/document/create-by-text",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
@@ -167,7 +177,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"name\": \"{{ $json.fileName }}\",\n  \"text\": {{ JSON.stringify($json.documentText) }},\n  \"indexing_technique\": \"high_quality\",\n  \"process_rule\": {\n    \"mode\": \"automatic\"\n  }\n}",
+        "jsonBody": "={\n  \"name\": \"{{ $json.originalPath.replace('/watch/', '') }}\",\n  \"text\": {{ JSON.stringify($json.documentText) }},\n  \"indexing_technique\": \"high_quality\",\n  \"process_rule\": {\n    \"mode\": \"automatic\"\n  }\n}",
         "options": {
           "timeout": 30000
         }
@@ -227,10 +237,15 @@
     },
     "住所フォーマット": {
       "main": [
-        [{ "node": "Gemini Vision API", "type": "main", "index": 0 }]
+        [{ "node": "Geminiリクエスト準備", "type": "main", "index": 0 }]
       ]
     },
     "位置情報なし": {
+      "main": [
+        [{ "node": "Geminiリクエスト準備", "type": "main", "index": 0 }]
+      ]
+    },
+    "Geminiリクエスト準備": {
       "main": [
         [{ "node": "Gemini Vision API", "type": "main", "index": 0 }]
       ]

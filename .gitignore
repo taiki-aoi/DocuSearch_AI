@@ -10,6 +10,7 @@ volumes/*
 # Watch folders
 watch/documents/*
 watch/images/*
+watch/bk/*
 
 # Keep folder structure
 !volumes/.gitkeep
