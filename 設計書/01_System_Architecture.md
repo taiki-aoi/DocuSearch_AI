@@ -206,6 +206,84 @@ flowchart TB
     DOC_CONTENT --> API --> CHUNK --> EMBED --> VECTOR --> SEARCH
 ```
 
+### 図5: 検索・利用フロー（ユーザー視点）
+
+ユーザーが自然言語で検索し、回答を得るまでの流れ。
+
+```mermaid
+flowchart TB
+    subgraph User["ユーザー"]
+        QUERY["自然言語クエリ<br/>「渋谷で撮った桜の写真は？」"]
+    end
+
+    subgraph DifyChat["Dify チャットボット"]
+        RECEIVE["クエリ受信"]
+        EMBED_Q["クエリEmbedding<br/>ベクトル化"]
+        RECEIVE --> EMBED_Q
+    end
+
+    subgraph Weaviate["Weaviate Vector DB"]
+        SEARCH["ベクトル類似検索"]
+        RESULTS["関連ドキュメント取得<br/>Top-K件"]
+        SEARCH --> RESULTS
+    end
+
+    subgraph RAG["RAG処理"]
+        CONTEXT["コンテキスト構築<br/>検索結果 + クエリ"]
+        LLM["LLM回答生成<br/>GPT-4o / Gemini"]
+        CONTEXT --> LLM
+    end
+
+    subgraph Response["回答"]
+        ANSWER["回答テキスト<br/>+ 参照元ドキュメント"]
+    end
+
+    QUERY --> RECEIVE
+    EMBED_Q --> SEARCH
+    RESULTS --> CONTEXT
+    LLM --> ANSWER
+```
+
+### 図6: システム全体フロー（登録と検索の統合図）
+
+データ登録フローと検索フローの両方を1つの図で表現。
+
+```mermaid
+flowchart TB
+    subgraph Registration["データ登録フロー"]
+        direction LR
+        FILES[("ファイル<br/>画像/PDF/文書")]
+        N8N["n8n<br/>オーケストレーション"]
+        GEMINI["Gemini API<br/>Vision/OCR"]
+        DIFY_REG["Dify API<br/>ドキュメント登録"]
+    end
+
+    subgraph Storage["ナレッジベース"]
+        WEAVIATE[("Weaviate<br/>ベクトルDB")]
+    end
+
+    subgraph Search["検索・利用フロー"]
+        direction LR
+        USER((ユーザー))
+        DIFY_CHAT["Dify<br/>チャットボット"]
+        LLM["LLM<br/>回答生成"]
+        ANSWER["回答"]
+    end
+
+    %% 登録フロー
+    FILES --> N8N
+    N8N <--> GEMINI
+    N8N --> DIFY_REG
+    DIFY_REG --> WEAVIATE
+
+    %% 検索フロー
+    USER --> DIFY_CHAT
+    DIFY_CHAT <--> WEAVIATE
+    DIFY_CHAT --> LLM
+    LLM --> ANSWER
+    ANSWER --> USER
+```
+
 ---
 
 ## コア・コンポーネント
