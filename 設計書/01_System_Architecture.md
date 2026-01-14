@@ -3,6 +3,211 @@
 ## システム概要
 本システムは、非構造化データ（ドキュメント、画像）を構造化データ（ベクトル、メタデータ）へ変換し、自然言語による高度な検索を実現するRAG（Retrieval-Augmented Generation）プラットフォームである。
 
+---
+
+## アーキテクチャ図
+
+### 図1: システム概要図（経営層・非技術者向け）
+
+シンプルな4ステップで、システムが何をするかを一目で理解できる図。
+
+```mermaid
+flowchart LR
+    subgraph Input["入力"]
+        DATA[("ファイル<br/>画像・PDF・文書")]
+    end
+
+    subgraph Process["自動処理"]
+        AI["AI分析<br/>画像認識・テキスト抽出"]
+    end
+
+    subgraph Storage["蓄積"]
+        KB[("ナレッジベース")]
+    end
+
+    subgraph Output["活用"]
+        SEARCH["自然言語検索"]
+    end
+
+    DATA --> AI --> KB --> SEARCH
+```
+
+### 図2: データフロー図（技術概要）
+
+ファイル種別ごとの処理パイプラインを示す図。
+
+```mermaid
+flowchart TB
+    subgraph Sources["データソース"]
+        IMG["画像<br/>JPG/PNG"]
+        PDF["PDF"]
+        DOC["文書<br/>DOCX/XLSX"]
+        TXT["テキスト<br/>TXT/MD/CSV"]
+    end
+
+    subgraph Orchestration["n8n オーケストレーション"]
+        MONITOR["ファイル監視<br/>5分間隔ポーリング"]
+        ROUTER{"ファイル種別<br/>判定"}
+    end
+
+    subgraph ImagePipeline["画像処理パイプライン"]
+        EXIF["EXIF抽出<br/>日時・GPS・カメラ"]
+        GEO["ジオコーディング<br/>座標→住所変換"]
+        VISION["Gemini Vision<br/>キャプション生成"]
+    end
+
+    subgraph DocPipeline["文書処理パイプライン"]
+        GEMINI_PDF["Gemini PDF処理<br/>OCR対応"]
+        DIFY_PARSE["Dify内蔵パーサー"]
+        TEXT_EXT["テキスト抽出"]
+    end
+
+    subgraph RAG["Dify RAG Engine"]
+        DOC_BUILD["ドキュメント構築"]
+        CHUNK["チャンキング"]
+        EMBED["Embedding<br/>ベクトル化"]
+    end
+
+    subgraph VectorDB["Weaviate"]
+        INDEX[("インデックス<br/>保存")]
+        SEMANTIC["セマンティック<br/>検索"]
+    end
+
+    %% ソースからオーケストレーション
+    IMG & PDF & DOC & TXT --> MONITOR --> ROUTER
+
+    %% 画像処理
+    ROUTER -->|"画像"| EXIF --> GEO --> VISION --> DOC_BUILD
+
+    %% 文書処理
+    ROUTER -->|"PDF"| GEMINI_PDF --> DOC_BUILD
+    ROUTER -->|"DOCX等"| DIFY_PARSE --> DOC_BUILD
+    ROUTER -->|"テキスト"| TEXT_EXT --> DOC_BUILD
+
+    %% RAG処理
+    DOC_BUILD --> CHUNK --> EMBED --> INDEX --> SEMANTIC
+```
+
+### 図3: コンポーネント詳細図（開発者向け）
+
+Dockerコンテナ構成とポート、依存関係を示す図。
+
+```mermaid
+flowchart TB
+    subgraph External["外部"]
+        USER((ユーザー))
+        DROPBOX[(Dropbox)]
+        LOCAL[("/watch<br/>ローカルフォルダ")]
+        GEMINI_API["Gemini API<br/>（外部サービス）"]
+    end
+
+    subgraph DockerNetwork["docusearch-network"]
+        subgraph Proxy["リバースプロキシ"]
+            NGINX["nginx:80"]
+        end
+
+        subgraph Workflow["ワークフロー"]
+            N8N["n8n:5678"]
+        end
+
+        subgraph DifyStack["Dify Stack"]
+            DIFY_WEB["dify-web:3000"]
+            DIFY_API["dify-api:5001"]
+            DIFY_WORKER["dify-worker"]
+            PLUGIN["plugin-daemon:5002"]
+            SANDBOX["sandbox"]
+            SSRF["ssrf-proxy"]
+        end
+
+        subgraph DataStores["データストア"]
+            POSTGRES[("postgres:5432")]
+            REDIS[("redis:6379")]
+            WEAVIATE[("weaviate:8080")]
+        end
+    end
+
+    %% ユーザーアクセス
+    USER --> NGINX
+    NGINX --> DIFY_WEB & DIFY_API & N8N
+
+    %% データソース
+    DROPBOX --> N8N
+    LOCAL --> N8N
+
+    %% n8n処理
+    N8N <-->|"Vision/OCR"| GEMINI_API
+    N8N -->|"create-by-text API"| DIFY_API
+
+    %% Dify内部
+    DIFY_API --> POSTGRES & REDIS & WEAVIATE
+    DIFY_API --> PLUGIN & SANDBOX & SSRF
+    DIFY_WORKER --> POSTGRES & REDIS & WEAVIATE
+    PLUGIN --> POSTGRES & REDIS
+
+    %% n8n DB
+    N8N --> POSTGRES
+```
+
+### 図4: 画像処理詳細フロー（開発者向け）
+
+画像がどのように処理されてベクトルDBに格納されるかの詳細。
+
+```mermaid
+flowchart TB
+    subgraph Input["入力"]
+        IMG_FILE["画像ファイル<br/>JPG/PNG"]
+    end
+
+    subgraph N8N["n8n ワークフロー"]
+        READ["バイナリ読み込み"]
+
+        subgraph EXIF_Block["EXIF処理"]
+            EXIF_PARSE["EXIF抽出"]
+            EXIF_DATA["・撮影日時<br/>・GPS座標<br/>・カメラ情報"]
+        end
+
+        subgraph GEO_Block["位置情報処理"]
+            GPS_CHECK{"GPS<br/>あり?"}
+            NOMINATIM["Nominatim API<br/>逆ジオコーディング"]
+            NO_GPS["位置情報なし"]
+            ADDRESS["住所テキスト"]
+        end
+
+        subgraph Vision_Block["Vision処理"]
+            B64["Base64エンコード"]
+            GEMINI["Gemini 2.5 Flash<br/>Vision API"]
+            CAPTION["日本語キャプション"]
+        end
+
+        DOC_BUILD["ドキュメント構築"]
+    end
+
+    subgraph Document["生成ドキュメント"]
+        DOC_CONTENT["■ファイル名: photo.jpg<br/>■撮影日時: 2024-01-15 14:30:00<br/>■撮影場所: 東京都渋谷区...<br/>■座標: 35.6xxx, 139.7xxx<br/>■カメラ: iPhone 15 Pro<br/>■画像内容: 青空の下、桜の..."]
+    end
+
+    subgraph Dify["Dify RAG Engine"]
+        API["POST /document/create-by-text"]
+        CHUNK["自動チャンキング<br/>indexing_technique: high_quality"]
+        EMBED["Embedding生成<br/>推奨: gemini-embedding-001"]
+    end
+
+    subgraph Weaviate["Weaviate Vector DB"]
+        VECTOR[("ベクトル保存")]
+        SEARCH["セマンティック検索<br/>「桜の写真」「渋谷で撮った写真」"]
+    end
+
+    IMG_FILE --> READ --> EXIF_PARSE --> EXIF_DATA
+    EXIF_DATA --> GPS_CHECK
+    GPS_CHECK -->|Yes| NOMINATIM --> ADDRESS
+    GPS_CHECK -->|No| NO_GPS --> ADDRESS
+    EXIF_DATA --> B64 --> GEMINI --> CAPTION
+    ADDRESS & CAPTION --> DOC_BUILD --> DOC_CONTENT
+    DOC_CONTENT --> API --> CHUNK --> EMBED --> VECTOR --> SEARCH
+```
+
+---
+
 ## コア・コンポーネント
 
 ### 1. オーケストレーション層 (Automation)
